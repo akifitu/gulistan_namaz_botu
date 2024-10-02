@@ -3,11 +3,16 @@ from datetime import datetime, timedelta
 from typing import List, Dict
 from user import User
 from telebot import TeleBot
+from telebot.types import Message
 
 TODAY = datetime.now().strftime('%d.%m.%Y')
 bot = TeleBot("7321495529:AAGuB45qmPioQO9gO5LIFgwdlRCW8qzBvlo")
 
+def get_username_from_msg(message: Message) -> str:
+    lastname = message.from_user.last_name or message.from_user.username or f"{message.from_user.id}"
+    return f"{message.from_user.first_name}-{lastname}"
 
+                    
 def readUsersFromCsv(file_path: str = 'data.csv') -> List[User]:
     """Read users from a CSV file"""
     users = []
@@ -127,26 +132,30 @@ def handle_start(message):
     bot.reply_to(message, "Welcome! Use /score <name> <date> to find a user's score or send a message to evaluate it.")
 
 @bot.message_handler(commands=['skorum'])
-def handle_skoryeni(message):
-    username = message.from_user.username or message.from_user.first_name
-    today = datetime.now().strftime('%d.%m.%Y')
+def handle_skoryeni(message: Message):
+    if message.from_user is not None:
 
-    # Load users from CSV
-    users = readUsersFromCsv('data.csv')
+        username = get_username_from_msg(message)
 
-    # Find the user
-    user = findUserByName(users, username)
+        today = datetime.now().strftime('%d.%m.%Y')
 
-    if user:
-        # Get today's score
-        score = user.days.get(datetime.strptime(today, '%d.%m.%Y'), 0)
-        bot.reply_to(message, f"Bugünkü skorunuz: {score} puan")
+        # Load users from CSV
+        users = readUsersFromCsv('data.csv')
+
+        # Find the user
+        user = findUserByName(users, username)
+
+        if user:
+            # Get today's score
+            score = user.days.get(datetime.strptime(today, '%d.%m.%Y'), 0)
+            bot.reply_to(message, f"Bugünkü skorunuz: {score} puan")
+        else:
+            bot.reply_to(message, "Kullanıcı bulunamadı.")
     else:
-        bot.reply_to(message, "Kullanıcı bulunamadı.")
-
+        bot.reply_to(message, "HATA: Kullanıcı bulunamadı")
 
 @bot.message_handler(commands=['skor'])
-def handle_score(message):
+def handle_score(message: Message):
     try:
         _, name, date = message.text.split()
         users = readUsersFromCsv('data.csv')
@@ -165,7 +174,7 @@ def handle_score(message):
 
 
 @bot.message_handler(commands=['tablo'])
-def handle_csv_request(message):
+def handle_csv_request(message: Message):
     """Send the CSV data file to the user."""
     try:
         # Define the file path
@@ -178,12 +187,44 @@ def handle_csv_request(message):
     except Exception as e:
         bot.reply_to(message, f"An error occurred: {e}")
 
+@bot.message_handler(content_types=['document'])
+def handle_csv_upload(message: Message):
+    try:
+        # Gönderilen dosya bir CSV mi kontrol et
+        if message.document.mime_type == 'text/csv':
+            file_info = bot.get_file(message.document.file_id)
+            downloaded_file = bot.download_file(file_info.file_path)
+
+            # Yeni dosyayı 'uploaded_data.csv' olarak kaydet
+            with open('uploaded_data.csv', 'wb') as new_file:
+                new_file.write(downloaded_file)
+
+            # Yeni dosyayı oku
+            with open('uploaded_data.csv', 'r') as file:
+                csv_reader = csv.reader(file, delimiter=';')
+                data = list(csv_reader)
+
+            # Eski CSV dosyasını aç ve içini temizle
+            with open('data.csv', 'w', newline='') as existing_file:
+                csv_writer = csv.writer(existing_file, delimiter=';')
+
+                # Yeni dosyanın içeriğini eski dosyaya yaz
+                csv_writer.writerows(data)
+
+            # Bilgilendirme mesajı
+            bot.reply_to(message, "Yeni CSV dosyası başarıyla yüklendi ve eski dosyanın yerine yazıldı.")
+        else:
+            bot.reply_to(message, "Lütfen bir CSV dosyası gönderin.")
+
+    except Exception as e:
+        bot.reply_to(message, f"Hata oluştu: {e}")
+
 
 def evaluateMessage(message: str) -> int:
     """Evaluate the total points for a message"""
     # Define allowed characters
     allowedChars = {'e', 'c', 'x','E','C','X','!','*'}
-
+        
     # Check if the message has exactly 5 characters
     if len(message) not in [5, 6]:
         return -1
@@ -199,7 +240,7 @@ def evaluateMessage(message: str) -> int:
 
 
 @bot.message_handler(func=lambda msg: True)
-def handle_message(message):
+def handle_message(message: Message):
     text = message.text.strip()
 
     # Mesajın başında sembol olup olmadığını kontrol et
@@ -220,17 +261,13 @@ def handle_message(message):
         score = evaluateMessage(text)
         date = datetime.now().strftime('%d.%m.%Y')  # Bugünkü tarih
 
-    # Skorun geçerli olup olmadığını kontrol et eğer 1<<6 arasında olmayan mesajsa error vermesin yoksa normal yazışmalara da tepki veriyor
-    if 1 < len(message.text) < 6 and score == -1:
-        bot.reply_to(message, "Gün kaydedilemedi: Mesaj 5 karakter uzunluğunda olmalı ve yalnızca 'e', 'c', veya 'x' harflerinden oluşmalıdır.")
-        return
 
     if score == -1:
         return
 
     # Kullanıcı bilgilerini CSV'den oku ve güncelle
     users = readUsersFromCsv('data.csv')
-    username = message.from_user.username or message.from_user.first_name
+    username = get_username_from_msg(message)
 
     addMissingDates(users, date)
 
@@ -257,7 +294,7 @@ def handle_message(message):
     else:
         bot.reply_to(message, f"Bugünün skoru başarıyla kaydedildi! Bugün: {score} puan kazandınız.")
     if score==36:
-        username = message.from_user.username or message.from_user.first_name
+        username = get_username_from_msg(message)
         bot.reply_to(message, f"Tebrikler, {username}!Kaydettiğin günde Tüm namazlarını cemaatle kıldın, seni kutluyorum!")
 
 
